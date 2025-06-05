@@ -1,0 +1,107 @@
+-- Oracle SQL: AEP RAD Daily-Level Aggregated Data
+-- This query produces daily-level enrollments, terminations, and growth data
+-- Supports Tableau use cases including YoY and Plan vs Actual analysis
+
+WITH current_month AS ( 
+  SELECT TRUNC(SYSDATE, 'MM') AS month_start,
+         LAST_DAY(SYSDATE) AS month_end
+  FROM dual
+),
+
+-- Step 1: Active Enrollments from Facets (sales actuals)
+enrollments_facet AS (
+  SELECT
+    a.facets_id,
+    a.plan_code,
+    a.plan_effective_date AS effective_date,
+    TRUNC(a.plan_effective_date) AS transaction_date,
+    a.county,
+    a.prod_bus_cat_code AS prod_id,
+    INITCAP(a.group_name) AS mapd_plan,
+    CASE 
+      WHEN a.group_name LIKE '%broker%' THEN 'Broker'
+      WHEN a.group_name LIKE '%direct%' THEN 'Direct'
+      WHEN a.group_name LIKE '%online%' THEN 'Online'
+      ELSE 'Other'
+    END AS sales_channel,
+    'Enroll' AS metric_type
+  FROM active_imapds_rad a
+  JOIN current_month cm ON TRUNC(a.plan_effective_date) BETWEEN cm.month_start AND cm.month_end
+),
+
+-- Step 2: Terminations - Voluntary
+vol_disenroll AS (
+  SELECT
+    beneficiary_id,
+    county_code AS county,
+    contract_no,
+    TRUNC(efct_date) AS transaction_date,
+    'Voluntary Term' AS metric_type
+  FROM admin.trr_vol_disenroll_rad v
+  JOIN current_month cm ON TRUNC(v.efct_date) BETWEEN cm.month_start AND cm.month_end
+),
+
+-- Step 3: Terminations - Involuntary
+invol_disenroll AS (
+  SELECT
+    beneficiary_id,
+    county_code AS county,
+    contract_no,
+    TRUNC(efct_date) AS transaction_date,
+    'Involuntary Term' AS metric_type
+  FROM admin.trr_invol_disenroll_rad i
+  JOIN current_month cm ON TRUNC(i.efct_date) BETWEEN cm.month_start AND cm.month_end
+),
+
+-- Step 4: Union Enrollments + Terminations
+combined_activity AS (
+  SELECT
+    transaction_date,
+    mapd_plan,
+    sales_channel,
+    county,
+    metric_type,
+    COUNT(DISTINCT facets_id) AS member_count
+  FROM enrollments_facet
+  GROUP BY transaction_date, mapd_plan, sales_channel, county, metric_type
+
+  UNION ALL
+
+  SELECT
+    transaction_date,
+    NULL AS mapd_plan,
+    NULL AS sales_channel,
+    county,
+    metric_type,
+    COUNT(DISTINCT beneficiary_id) AS member_count
+  FROM vol_disenroll
+  GROUP BY transaction_date, county, metric_type
+
+  UNION ALL
+
+  SELECT
+    transaction_date,
+    NULL AS mapd_plan,
+    NULL AS sales_channel,
+    county,
+    metric_type,
+    COUNT(DISTINCT beneficiary_id) AS member_count
+  FROM invol_disenroll
+  GROUP BY transaction_date, county, metric_type
+),
+
+-- Step 5: Final Output for Tableau
+final_output AS (
+  SELECT
+    ca.transaction_date,
+    ca.mapd_plan,
+    ca.sales_channel,
+    INITCAP(cm.hom_cnty_nm) AS county,
+    ca.metric_type,
+    ca.member_count
+  FROM combined_activity ca
+  LEFT JOIN admin.county_code_mapping cm ON ca.county = cm.hom_cnty_cd
+)
+
+SELECT * FROM final_output
+ORDER BY transaction_date, mapd_plan, sales_channel, county, metric_type;
