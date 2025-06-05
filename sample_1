@@ -1,107 +1,124 @@
--- Oracle SQL: AEP RAD Daily-Level Aggregated Data
--- This query produces daily-level enrollments, terminations, and growth data
--- Supports Tableau use cases including YoY and Plan vs Actual analysis
+-- AEP RAD DAILY QUERY
+-- This query produces production-grade daily-level Medicare Advantage AEP RAD data
+-- Including Enrollments, Voluntary & Involuntary Terminations, Growth, Sales Type, Plan, and County info
 
-WITH current_month AS ( 
-  SELECT TRUNC(SYSDATE, 'MM') AS month_start,
-         LAST_DAY(SYSDATE) AS month_end
-  FROM dual
+WITH active_members AS (
+  SELECT 
+    facets_id,
+    HICN,
+    group_id,
+    plan_code,
+    plan_effective_date,
+    plan_term_date,
+    county,
+    prod_bus_cat_code,
+    PRER_PRPR_ID
+  FROM active_imapds_rad
 ),
 
--- Step 1: Active Enrollments from Facets (sales actuals)
-enrollments_facet AS (
-  SELECT
-    a.facets_id,
-    a.plan_code,
-    a.plan_effective_date AS effective_date,
-    TRUNC(a.plan_effective_date) AS transaction_date,
-    a.county,
-    a.prod_bus_cat_code AS prod_id,
-    INITCAP(a.group_name) AS mapd_plan,
+termed_members AS (
+  SELECT 
+    sbsb_id AS facets_id,
+    member_hicn AS HICN,
+    member_orig_eff_date,
+    mepe_term_date AS term_date,
+    PRER_PRPR_ID,
+    'Voluntary' AS term_type
+  FROM admin.termed_imapd_facet_rad
+
+  UNION ALL
+
+  SELECT 
+    beneficiary_id AS HICN,
+    NULL AS member_hicn,
+    NULL AS member_orig_eff_date,
+    efct_date AS term_date,
+    NULL AS PRER_PRPR_ID,
+    'Voluntary' AS term_type
+  FROM admin.trr_vol_disenroll_rad
+
+  UNION ALL
+
+  SELECT 
+    beneficiary_id AS HICN,
+    NULL AS member_hicn,
+    NULL AS member_orig_eff_date,
+    efct_date AS term_date,
+    NULL AS PRER_PRPR_ID,
+    'Involuntary' AS term_type
+  FROM trr_invol_disenroll_rad
+),
+
+enrollments AS (
+  SELECT 
+    beneficiary_id AS HICN,
+    transaction_date AS enroll_date,
+    contract_number,
+    plan_benefit_package_id,
+    effect_date,
+    election_type_code,
+    'Enrolled' AS enrollment_type
+  FROM admin.trr_endrolls_rad
+  WHERE txn_code = '61'
+),
+
+sales_agency_data AS (
+  SELECT 
+    facets_sbscr_id AS facets_id,
+    applic_hicn AS HICN,
+    facets_grp_id AS group_id,
+    enroll_cov_effective_date,
+    agency_name,
     CASE 
-      WHEN a.group_name LIKE '%broker%' THEN 'Broker'
-      WHEN a.group_name LIKE '%direct%' THEN 'Direct'
-      WHEN a.group_name LIKE '%online%' THEN 'Online'
+      WHEN inside_sales_agent_id IS NOT NULL THEN 'Inside'
+      WHEN outside_sales_agent_id IS NOT NULL THEN 'Outside'
       ELSE 'Other'
-    END AS sales_channel,
-    'Enroll' AS metric_type
-  FROM active_imapds_rad a
-  JOIN current_month cm ON TRUNC(a.plan_effective_date) BETWEEN cm.month_start AND cm.month_end
+    END AS sales_type
+  FROM admin.mam_rad
 ),
 
--- Step 2: Terminations - Voluntary
-vol_disenroll AS (
-  SELECT
-    beneficiary_id,
-    county_code AS county,
-    contract_no,
-    TRUNC(efct_date) AS transaction_date,
-    'Voluntary Term' AS metric_type
-  FROM admin.trr_vol_disenroll_rad v
-  JOIN current_month cm ON TRUNC(v.efct_date) BETWEEN cm.month_start AND cm.month_end
+county_mapping AS (
+  SELECT 
+    hom_cnty_cd AS county,
+    hom_cnty_nm AS county_name,
+    state_cd,
+    fips_st_cd
+  FROM admin.county_code_mapping
 ),
 
--- Step 3: Terminations - Involuntary
-invol_disenroll AS (
-  SELECT
-    beneficiary_id,
-    county_code AS county,
-    contract_no,
-    TRUNC(efct_date) AS transaction_date,
-    'Involuntary Term' AS metric_type
-  FROM admin.trr_invol_disenroll_rad i
-  JOIN current_month cm ON TRUNC(i.efct_date) BETWEEN cm.month_start AND cm.month_end
-),
-
--- Step 4: Union Enrollments + Terminations
-combined_activity AS (
-  SELECT
-    transaction_date,
-    mapd_plan,
-    sales_channel,
-    county,
-    metric_type,
-    COUNT(DISTINCT facets_id) AS member_count
-  FROM enrollments_facet
-  GROUP BY transaction_date, mapd_plan, sales_channel, county, metric_type
-
-  UNION ALL
-
-  SELECT
-    transaction_date,
-    NULL AS mapd_plan,
-    NULL AS sales_channel,
-    county,
-    metric_type,
-    COUNT(DISTINCT beneficiary_id) AS member_count
-  FROM vol_disenroll
-  GROUP BY transaction_date, county, metric_type
-
-  UNION ALL
-
-  SELECT
-    transaction_date,
-    NULL AS mapd_plan,
-    NULL AS sales_channel,
-    county,
-    metric_type,
-    COUNT(DISTINCT beneficiary_id) AS member_count
-  FROM invol_disenroll
-  GROUP BY transaction_date, county, metric_type
-),
-
--- Step 5: Final Output for Tableau
-final_output AS (
-  SELECT
-    ca.transaction_date,
-    ca.mapd_plan,
-    ca.sales_channel,
-    INITCAP(cm.hom_cnty_nm) AS county,
-    ca.metric_type,
-    ca.member_count
-  FROM combined_activity ca
-  LEFT JOIN admin.county_code_mapping cm ON ca.county = cm.hom_cnty_cd
+product_map AS (
+  SELECT 
+    prod_id,
+    prod_description
+  FROM admin.products_map
 )
 
-SELECT * FROM final_output
-ORDER BY transaction_date, mapd_plan, sales_channel, county, metric_type;
+-- FINAL SELECT: combine enrollments, terminations, county info, and agency/sales type
+SELECT 
+  e.enroll_date,
+  s.sales_type,
+  s.agency_name,
+  e.enrollment_type,
+  COALESCE(t.term_type, 'Active') AS termination_type,
+  am.plan_code,
+  am.county,
+  cm.county_name,
+  pm.prod_description,
+  e.HICN,
+  e.contract_number,
+  am.group_id,
+  am.PRER_PRPR_ID
+FROM enrollments e
+LEFT JOIN termed_members t
+  ON e.HICN = t.HICN AND e.enroll_date = t.term_date
+LEFT JOIN active_members am
+  ON e.HICN = am.HICN
+LEFT JOIN sales_agency_data s
+  ON e.HICN = s.HICN
+LEFT JOIN county_mapping cm
+  ON am.county = cm.county
+LEFT JOIN product_map pm
+  ON am.prod_bus_cat_code = pm.prod_id
+
+-- Dashboard filters compatibility
+-- Tableau will support filtering on: sales_type, plan_code, and enroll_date (by month or exact date)
