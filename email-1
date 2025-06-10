@@ -1,0 +1,17 @@
+Milestone 1: Senior Sales Pipeline Report (SS Report)
+Deadline: Friday, June 20th
+This milestone focuses on delivering the SS Report with accurate data and business-validated visuals, ready for production.
+June 13th: Complete all visuals.
+June 17th: Finalize all dashboard functionalities to be production-ready.
+June 19th: Document data validation against existing reports and create an Excel sheet outlining KPI logic for business review.
+June 20th: Deploy the dashboard for User Acceptance Testing (UAT) or directly to production, as determined by Sri/Business requirements.
+June 25th: Complete documentation of the data source structure in Tableau and the visuals.
+Milestone 2: RAD Report
+Deadline: Friday, June 27th
+This milestone focuses on delivering the RAD Report with accurate data, ready for UAT.
+June 13th: Complete the RAD query and integrate it into Tableau, including initial data validation.
+Note: The timeline for this step may be adjusted due to the complexity of joining nine tables and ensuring data quality.
+June 18th: Create initial fields and visuals based on the minimum requirements from the existing RAD report version.
+June 20th: Conduct an initial review with Sri/Business stakeholders.
+June 25th: Develop the final dashboard views.
+June 27th: Push the RAD report to UAT.
