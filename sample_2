@@ -1,0 +1,126 @@
+-- AEP RAD DAILY QUERY - MODULAR VERSION
+-- This script contains two separate production-grade Oracle SQL queries
+-- One for ENROLLMENTS (with channel/sales info), one for TERMINATIONS (voluntary, involuntary, and facets)
+
+--------------------------------------------------------------------------------
+-- ENROLLMENTS QUERY (with MAM for sales info)
+--------------------------------------------------------------------------------
+WITH enrolls AS (
+  SELECT 
+    beneficiary_id AS HICN,
+    transaction_date AS enroll_date,
+    effect_date,
+    contract_number,
+    plan_benefit_package_id,
+    election_type_code,
+    plan_benefit_package_id,
+    county_code,
+    state_code,
+    rx_id,
+    unique_id
+  FROM admin.trr_endrolls_rad
+  WHERE txn_code = '61'
+),
+mam_sales AS (
+  SELECT 
+    applic_hicn AS HICN,
+    facets_sbscr_id AS facets_id,
+    facets_grp_id AS group_id,
+    enroll_cov_effective_date,
+    agency_name,
+    med_sls_cd,
+    dent_sls_cd,
+    mwt_slsrp_id,
+    inside_sales_agent_id,
+    outside_sales_agent_id,
+    supp_agnt_id,
+    language_nm,
+    electronic_communication_qst_one_ind,
+    communication_preference_code,
+    agent_number,
+    agent_national_id,
+    agent_health_plan_id,
+    agnt_first_name,
+    agnt_last_name,
+    CASE 
+      WHEN inside_sales_agent_id IS NOT NULL THEN 'Inside'
+      WHEN outside_sales_agent_id IS NOT NULL THEN 'Outside'
+      ELSE 'Other'
+    END AS sales_type
+  FROM admin.mam_rad
+)
+SELECT 
+  e.HICN,
+  e.enroll_date,
+  e.effect_date,
+  e.contract_number,
+  e.plan_benefit_package_id,
+  e.election_type_code,
+  e.county_code,
+  e.state_code,
+  e.rx_id,
+  e.unique_id,
+  m.facets_id,
+  m.group_id,
+  m.enroll_cov_effective_date,
+  m.sales_type,
+  m.agency_name,
+  m.med_sls_cd,
+  m.dent_sls_cd,
+  m.language_nm,
+  m.agent_number,
+  m.agnt_first_name,
+  m.agnt_last_name
+FROM enrolls e
+LEFT JOIN mam_sales m ON e.HICN = m.HICN
+
+--------------------------------------------------------------------------------
+-- TERMINATIONS QUERY (voluntary + involuntary TRR + Facets)
+--------------------------------------------------------------------------------
+WITH vol_disenrollments AS (
+  SELECT 
+    beneficiary_id AS HICN,
+    efct_date AS term_date,
+    'Voluntary' AS term_type,
+    gender_code,
+    txn_reply_code,
+    contract_no,
+    county_code,
+    state_code,
+    pln_benefit_pkg_id,
+    election_type_code
+  FROM admin.trr_vol_disenroll_rad
+),
+invol_disenrollments AS (
+  SELECT 
+    beneficiary_id AS HICN,
+    efct_date AS term_date,
+    'Involuntary' AS term_type,
+    gender_code,
+    txin_reply_code AS txn_reply_code,
+    contract_no,
+    county_code,
+    state_code,
+    pln_benefit_pkg_id,
+    election_type_code
+  FROM admin.trr_invol_disenroll_rad
+),
+termed_facet AS (
+  SELECT 
+    member_hicn AS HICN,
+    mepe_term_date AS term_date,
+    'Facet' AS term_type,
+    NULL AS gender_code,
+    NULL AS txn_reply_code,
+    NULL AS contract_no,
+    NULL AS county_code,
+    NULL AS state_code,
+    NULL AS pln_benefit_pkg_id,
+    NULL AS election_type_code
+  FROM admin.termed_imapd_facet_rad
+)
+SELECT * FROM vol_disenrollments
+UNION ALL
+SELECT * FROM invol_disenrollments
+UNION ALL
+SELECT * FROM termed_facet
